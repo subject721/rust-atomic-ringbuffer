@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 #[allow(dead_code)]
 
-struct SharedBufferState<T: Sized + Clone> {
+struct SharedBufferState<T: Sized> {
     ring_capacity: u64,
     element_size: u64,
 
@@ -19,15 +19,15 @@ struct SharedBufferState<T: Sized + Clone> {
     _marker: marker::PhantomData<T>,
 }
 
-pub struct BufferWriter<T: Sized + Clone> {
+pub struct BufferWriter<T: Sized> {
     shared_state: Arc<SharedBufferState<T>>,
 }
 
-pub struct BufferReader<T: Sized + Clone> {
+pub struct BufferReader<T: Sized> {
     shared_state: Arc<SharedBufferState<T>>,
 }
 
-impl<T: Sized + Clone> SharedBufferState<T> {
+impl<T: Sized> SharedBufferState<T> {
     pub fn size(&self) -> usize {
         let cur_read_idx = self.rd_index.load(Ordering::Acquire);
         let cur_write_idx = self.wr_index.load(Ordering::Acquire);
@@ -40,7 +40,7 @@ impl<T: Sized + Clone> SharedBufferState<T> {
     }
 }
 
-impl<T: Sized + Clone> BufferWriter<T> {
+impl<T: Sized> BufferWriter<T> {
     pub fn size(&self) -> usize {
         let state = self.shared_state.deref();
 
@@ -85,7 +85,7 @@ impl<T: Sized + Clone> BufferWriter<T> {
     }
 }
 
-impl<T: ?Sized + Clone> BufferReader<T> {
+impl<T: Sized> BufferReader<T> {
     pub fn size(&self) -> usize {
         let state = self.shared_state.deref();
 
@@ -130,6 +130,12 @@ impl<T: ?Sized + Clone> BufferReader<T> {
     }
 }
 
+impl<T> Drop for BufferReader<T> {
+    fn drop(&mut self) {
+        while self.try_read().is_some() {};
+    }
+}
+
 fn size_align(type_size: usize, min_alignment: usize) -> usize {
     let mut tmp = type_size / min_alignment;
 
@@ -140,30 +146,22 @@ fn size_align(type_size: usize, min_alignment: usize) -> usize {
     tmp * min_alignment
 }
 
-pub fn create_ring_buffer<T: Sized + Clone>(
+pub fn create_ring_buffer<T: Sized>(
     buffer_capacity: usize,
-    default_value: &T,
 ) -> (BufferWriter<T>, BufferReader<T>) {
-    if buffer_capacity < 2 {
-        panic!("buffer capacity must be greater than 1");
-    }
+
+    let actual_buffer_capacity = if buffer_capacity < 2 {
+        2
+    } else {
+        buffer_capacity
+    };
 
     let element_size = size_align(std::mem::size_of::<T>(), std::mem::align_of::<*const T>());
 
-    let mut storage = bytes::BytesMut::with_capacity(element_size * buffer_capacity);
-
-    let base_ptr = storage.as_mut_ptr();
-
-    for idx in 0..buffer_capacity {
-        unsafe {
-            let element_ptr = base_ptr.offset((idx * element_size) as isize) as *mut T;
-
-            *element_ptr = default_value.clone();
-        }
-    }
+    let storage = bytes::BytesMut::with_capacity(element_size * actual_buffer_capacity);
 
     let shared_state = Arc::new(SharedBufferState {
-        ring_capacity: buffer_capacity as u64,
+        ring_capacity: actual_buffer_capacity as u64,
         element_size: element_size as u64,
         wr_index: AtomicU64::new(0),
         rd_index: AtomicU64::new(0),
@@ -185,7 +183,7 @@ mod tests {
 
     #[test]
     fn basic_creation_test() {
-        let (buffer_writer, buffer_reader) = create_ring_buffer(12, &0u32);
+        let (buffer_writer, buffer_reader) = create_ring_buffer::<i32>(12);
 
         assert_eq!(buffer_writer.capacity(), 12);
         assert_eq!(buffer_reader.capacity(), 12);
@@ -196,7 +194,7 @@ mod tests {
 
     #[test]
     fn basic_element_test() {
-        let (mut buffer_writer, mut buffer_reader) = create_ring_buffer(12, &0u32);
+        let (mut buffer_writer, mut buffer_reader) = create_ring_buffer::<u32>(12);
 
         assert!(buffer_writer.try_write(1337u32).is_ok());
 
@@ -214,7 +212,7 @@ mod tests {
 
     #[test]
     fn basic_element_test2() {
-        let (mut buffer_writer, mut buffer_reader) = create_ring_buffer(2, &0u32);
+        let (mut buffer_writer, mut buffer_reader) = create_ring_buffer::<u32>(2);
 
         assert!(buffer_writer.try_write(1u32).is_ok());
         assert!(buffer_writer.try_write(2u32).is_err());
@@ -239,12 +237,8 @@ mod tests {
 
     #[test]
     fn basic_element_test3() {
-        let (mut buffer_writer, mut buffer_reader) = create_ring_buffer(
-            2,
-            &SomeElementType {
-                s: String::from("None"),
-                v: 0u32,
-            },
+        let (mut buffer_writer, mut buffer_reader) = create_ring_buffer::<SomeElementType>(
+            2
         );
 
         let new_elem1 = SomeElementType {

@@ -1,7 +1,7 @@
 use atomic_ring_buffer::create_ring_buffer;
 
 pub fn main() {
-    let (mut buffer_writer, mut buffer_reader) = create_ring_buffer(8, &String::from("N/A"));
+    let (mut buffer_writer, mut buffer_reader) = create_ring_buffer::<String>(8);
 
     let num_messages = 64;
 
