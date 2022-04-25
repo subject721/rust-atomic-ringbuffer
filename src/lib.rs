@@ -179,6 +179,11 @@ pub fn create_ring_buffer<T: Sized>(
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool};
+    use std::time::Duration;
+
     use crate::create_ring_buffer;
 
     #[test]
@@ -267,5 +272,55 @@ mod tests {
     }
 
     #[test]
-    fn threaded_test1() {}
+    fn threaded_test1() {
+
+        let (mut buffer_writer, mut buffer_reader) = create_ring_buffer::<u64>(256);
+
+        let run_flag  = Arc::new(AtomicBool::new(true));
+
+        let run_flag_writer = Arc::clone(&run_flag);
+        let run_flag_reader = Arc::clone(&run_flag);
+
+        let writer_thread = std::thread::spawn(move || {
+            let mut counter = 0u64;
+
+            while run_flag_writer.load(std::sync::atomic::Ordering::Acquire) {
+                if buffer_writer.try_write(counter).is_ok() {
+                    counter += 1;
+                }
+            }
+
+            println!("last written element was {}", counter - 1);
+        });
+
+        let reader_thread = std::thread::spawn(move || {
+            let mut last_element = 0u64;
+
+            while run_flag_reader.load(std::sync::atomic::Ordering::Acquire) {
+                let read_element = buffer_reader.try_read();
+
+                if let Some(element) = read_element {
+                    if last_element == 0 {
+                        last_element = element;
+                    } else {
+                        assert_eq!(last_element + 1, element);
+
+                        last_element = element;
+                    }
+                }
+            }
+
+            println!("Last read element was {}", last_element);
+        });
+
+        let run_duration = Duration::from_millis(2500);
+
+        thread::sleep(run_duration);
+
+        run_flag.store(false, std::sync::atomic::Ordering::Release);
+
+        writer_thread.join();
+        reader_thread.join();
+
+    }
 }
