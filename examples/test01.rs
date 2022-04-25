@@ -1,3 +1,4 @@
+use std::time::Instant;
 use atomic_ring_buffer::create_ring_buffer;
 
 pub fn main() {
@@ -9,7 +10,13 @@ pub fn main() {
         for idx in 0..num_messages {
             let msg = String::from(format!("Message {}", idx));
 
+            let tstart = Instant::now();
+
             let mut result = buffer_writer.try_write(msg);
+
+            let tend = Instant::now();
+
+            println!("write took {} ns", tend.duration_since(tstart).as_nanos() as u64);
 
             while result.is_err() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
